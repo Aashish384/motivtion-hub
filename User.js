@@ -25,6 +25,10 @@ const userSchema = new mongoose.Schema(
       lowercase: true,
       unique: true,
     },
+    enabled: {
+      type: Boolean,
+      default: true,
+    },
     password: {
       type: String,
       required: true,
@@ -67,6 +71,7 @@ const userSchema = new mongoose.Schema(
         },
       },
     ],
+    reports: [],
   },
   { timestamps: true }
 );
