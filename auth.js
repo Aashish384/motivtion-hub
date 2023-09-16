@@ -22,6 +22,10 @@ export const protect = async (req, res, next) => {
     return next(new ApiError("This user is not authorized", 401));
   }
 
+  if (currentUser.enabled == false) {
+    return next(new ApiError("You have been banned. Please contact an admin.", 401));
+  }
+
   req.user = currentUser;
   next();
 };
