@@ -37,6 +37,7 @@ export const getConversations = async (req, res, next) => {
     })
       .populate("members")
       .sort("-createdAt");
+
     res.status(200).json({
       status: "success",
       conversations,

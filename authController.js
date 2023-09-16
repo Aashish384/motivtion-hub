@@ -64,6 +64,10 @@ export const loginUser = async (req, res, next) => {
       return next(new ApiError("The given credentials are invalid", 401));
     }
 
+    if (foundUser.enabled === false) {
+      return next(new ApiError("You have been banned. Please contact an admin.", 401));
+    }
+
     foundUser.password = undefined;
     sendAuthToken(foundUser, res);
   } catch (err) {

@@ -2,9 +2,15 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 
 import User from "../models/User.js";
+import Challenge from "../models/Challenge.js";
+import Group from "../models/Group.js";
+import ExpertApplication from "../models/ExpertApplication.js";
+import Notification from "../models/Notification.js";
 import isEmpty from "../utils/isEmpty.js";
+import ApiError from "../utils/apiError.js";
 import inputValidator from "../validation/inputValidator.js";
 import { sendPasswordResetEmail, sendPasswordResetSuccessEmail } from "../utils/email.js";
+import { addNotification } from "../utils/addNotification.js";
 
 // Function to get my profile
 export const getmyProfile = async (req, res, next) => {
@@ -23,6 +29,10 @@ export const getmyProfile = async (req, res, next) => {
 export const getUserProfile = async (req, res, next) => {
   try {
     const userProfile = await User.findById(req.params.userId);
+
+    if (userProfile.enabled == false) {
+      return next(new ApiError("This user is banned", 400));
+    }
     res.status(200).json({
       status: "Success",
       message: "Profile fetched successfully",
@@ -230,6 +240,12 @@ export const addFriend = async (req, res) => {
   mainUser.friends.push({ user: user._id, status: "sent", sent: new Date() });
   await mainUser.save();
   user.friends.push({ user: mainUser._id, status: "received", sent: new Date() });
+  addNotification(
+    user._id,
+    `${mainUser.username} sent you a friend request`,
+    "friend-request",
+    user._id
+  );
   await user.save();
 
   let updatedUser = await User.findById(req.body.userId);
@@ -267,6 +283,12 @@ export const acceptFriend = async (req, res) => {
   });
   user2.friends = friends2;
   await user2.save();
+  addNotification(
+    user2._id,
+    `${user.username} accepted your friend request`,
+    "friend-request-accepted",
+    user2._id
+  );
 
   res.status(200).json({
     status: "success",
@@ -323,6 +345,11 @@ export const changeRole = async (req, res, next) => {
   try {
     let user = await User.findById(req.params.userId);
     user.role = req.body.newRole;
+    if (req.body.newStatus === "enabled") {
+      user.enabled = true;
+    } else if (req.body.newStatus === "disabled") {
+      user.enabled = false;
+    }
     await user.save();
     res.status(200).json({
       status: "success",
@@ -332,3 +359,172 @@ export const changeRole = async (req, res, next) => {
     next(err);
   }
 };
+
+// Function to report a user
+export const reportUser = async (req, res, next) => {
+  try {
+    let user = await User.findById(req.params.userId);
+    user.reports.push({
+      reporter: {
+        _id: req.user._id,
+        name: req.user.name,
+        username: req.user.username,
+        photo: req.user.photo,
+      },
+      why: req.body.why,
+    });
+    await user.save();
+    const admins = await User.find({ role: "admin" });
+
+    admins.forEach((admin) => {
+      addNotification(admin._id, `${user.username} has been reported`, "user-reported", admin._id);
+    });
+
+    res.status(200).json({
+      status: "success",
+      message: "User reported successfully",
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Function to get the notifications of a user
+export const getNotifications = async (req, res, next) => {
+  try {
+    let notifications = await Notification.find({
+      owner: req.user._id,
+    })
+      .sort("-createdAt")
+      .exec();
+
+    res.status(200).json({
+      status: "success",
+      notifications,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Function to get the notifications of a user
+export const readNotifications = async (req, res, next) => {
+  try {
+    await Notification.updateMany({ owner: req.user._id }, { read: true });
+
+    let notifications = await Notification.find({
+      owner: req.user._id,
+    })
+      .sort("-createdAt")
+      .exec();
+
+    res.status(200).json({
+      status: "success",
+      notifications,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Function to apply for an expert
+export const applyExpert = async (req, res, next) => {
+  const expertFiles = req.files.map((file) => {
+    const filePath = file.path.replace(/\\/g, "/");
+    return {
+      url: filePath,
+    };
+  });
+
+  const newExpertApplication = new ExpertApplication({
+    appliedBy: req.user._id,
+    message: req.body.message,
+    files: expertFiles,
+  });
+
+  try {
+    await newExpertApplication.save();
+    res.status(201).json({
+      status: "success",
+      message: "Expert application created successfully",
+      expertApplication: newExpertApplication,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Function to fetch all expert applications
+export const fetchExpertApplications = async (req, res, next) => {
+  try {
+    let expertApplications = await ExpertApplication.find().populate("appliedBy");
+
+    expertApplications = expertApplications.filter(
+      (application) => application.appliedBy.enabled == true
+    );
+
+    res.status(200).json({
+      status: "success",
+      expertApplications,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Function to fetch all expert applications
+export const acceptExpertApplication = async (req, res, next) => {
+  try {
+    let expertApplication = await ExpertApplication.findById(req.params.applicationId);
+
+    let user = await User.findById(expertApplication.appliedBy);
+
+    user.role = "expert";
+
+    await user.save();
+    await ExpertApplication.findByIdAndDelete(req.params.applicationId);
+
+    const expertApplications = await ExpertApplication.find().populate("appliedBy");
+    addNotification(
+      user._id,
+      "Your application for expert has been accepted",
+      "expert-application",
+      user._id
+    );
+    res.status(200).json({
+      status: "success",
+      expertApplications,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+// Function to fetch all expert applications
+export const rejectExpertApplication = async (req, res, next) => {
+  try {
+    await ExpertApplication.findByIdAndDelete(req.params.applicationId);
+
+    const expertApplications = await ExpertApplication.find().populate("appliedBy");
+
+    res.status(200).json({
+      status: "success",
+      expertApplications,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Function to delete a user
+// export const deleteUser = async (req, res, next) => {
+//   try {
+//     const user = await User.findById(req.params.userId);
+//     user.enabled = false;
+//     await user.save();
+//     res.status(200).json({
+//       status: "success",
+//     });
+//   } catch (err) {
+//     next(err);
+//   }
+// };

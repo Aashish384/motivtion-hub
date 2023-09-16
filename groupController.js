@@ -1,10 +1,15 @@
 import Group from "../models/Group.js";
 import User from "../models/User.js";
 import ApiError from "../utils/apiError.js";
+import { addNotification } from "../utils/addNotification.js";
 
 // Function to create a new group
 export const createGroup = async (req, res, next) => {
   try {
+    if (req.user.enabled == false) {
+      return next(new ApiError("You are banned", 400));
+    }
+
     let newGroup = new Group({
       createdBy: req.user._id,
       title: req.body.title,
@@ -17,6 +22,18 @@ export const createGroup = async (req, res, next) => {
 
     await newGroup.save();
 
+    // Send the notifications
+    const users = await User.find({ _id: { $ne: req.user._id } });
+
+    for (let i = 0; i < users.length; i++) {
+      await addNotification(
+        users[i]._id,
+        `${req.user.username} has created a new group`,
+        "group",
+        newGroup._id
+      );
+    }
+
     res.status(200).json({
       status: "Success",
       message: "Group created successfully",
@@ -27,14 +44,34 @@ export const createGroup = async (req, res, next) => {
   }
 };
 
-// Function to get all the challenges
+// Function to get all the groups
 export const getGroups = async (req, res, next) => {
   try {
-    const groups = await Group.find().populate("members.user createdBy");
+    let groups = await Group.find().populate("members.user createdBy");
+
+    groups = groups.filter((group) => group.createdBy.enabled == true);
+
     res.status(200).json({
       status: "Success",
       message: "Groups fetched successfully",
       groups,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Function to delete a group
+export const deleteGroup = async (req, res, next) => {
+  try {
+    if (req.user.enabled == false) {
+      return next(new ApiError("You are banned", 400));
+    }
+
+    await Group.findByIdAndDelete(req.params.groupId);
+    res.status(200).json({
+      status: "Success",
+      message: "Groups deleted successfully",
     });
   } catch (err) {
     next(err);
@@ -50,6 +87,10 @@ export const addGroupMember = async (req, res, next) => {
 
     if (!user) {
       return next(new ApiError("User doesn't exist", 400));
+    }
+
+    if (!user.enabled) {
+      return next(new ApiError("This user is banned", 400));
     }
 
     const isFound = group.members.findIndex((el) => user._id.equals(el.user));
